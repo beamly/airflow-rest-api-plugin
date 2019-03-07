@@ -15,6 +15,7 @@ import logging
 import subprocess
 import os
 import socket
+import shutil
 
 """
 CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org/cli.html
@@ -434,6 +435,8 @@ apis_metadata = [
              "required": True},
             {"name": "force", "description": "Force upload if any of the archived files exist.",
              "form_input_type": "checkbox", "required": False},
+            {"name": "delete_current_dags", "description": "Deletes all current dag files before adding the archive.",
+             "form_input_type": "checkbox", "required": False},
         ]
     },
     {
@@ -736,9 +739,6 @@ class REST_API(BaseView):
         if not dag_archive.filename.endswith('.zip'):
             return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive is not a *.zip file")
 
-        keep_top_level_folder = True if request.form.get('keep_top_level_folder') is not None else False
-        logging.info("deploy_dag_archive keep_top_level_folder in archived dages: " + str(keep_top_level_folder))
-
         import zipfile
 
         zf = zipfile.ZipFile(dag_archive.stream)
@@ -758,7 +758,18 @@ class REST_API(BaseView):
                 logging.warning("Files already exist: {}".format(existing_paths))
                 return REST_API_Response_Util.get_400_error_response(base_response, "Files already exist: {}".format(existing_paths))
 
-        # output['zf'] = [name for name in zf.namelist()]
+
+        delete_current_dags = True if request.form.get('delete_current_dags') is not None else False
+        logging.info("deploy_dag_archive keep_top_level_folder in archived dages: " + str(delete_current_dags))
+
+        if delete_current_dags:
+            # Removes all contents of a folder but not the folder itself.
+            for root, dirs, files in os.walk(airflow_dags_folder):
+                for f in files:
+                    os.unlink(os.path.join(root, f))
+                for d in dirs:
+                    shutil.rmtree(os.path.join(root, d))
+
         for name in file_names:
             zf.extract(name, path=airflow_dags_folder)
 
