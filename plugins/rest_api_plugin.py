@@ -15,6 +15,8 @@ import logging
 import subprocess
 import os
 import socket
+import shutil
+
 
 """
 CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org/cli.html
@@ -422,6 +424,25 @@ apis_metadata = [
         ]
     },
     {
+        "name": "deploy_dag_archive",
+        "description": "Deploys a zipped archive of the entire DAG directory",
+        "airflow_version": "None - Custom API",
+        "http_method": "POST",
+        "post_body_description": "dag_archive - POST Body Element - REQUIRED",
+        "form_enctype": "multipart/form-data",
+        "arguments": [],
+        "post_arguments": [
+            {"name": "dag_module", "description": "Top level module name within dags folder",
+             "form_input_type": "text", "required": True},
+            {"name": "dag_archive", "description": "Python file to upload and deploy", "form_input_type": "file",
+             "required": True},
+            {"name": "force", "description": "Force upload if any of the archived files exist.",
+             "form_input_type": "checkbox", "required": False},
+            {"name": "delete_current_dags", "description": "Deletes all current dag files before adding the archive.",
+             "form_input_type": "checkbox", "required": False},
+        ]
+    },
+    {
         "name": "refresh_dag",
         "description": "Refresh a DAG in the Web Server",
         "airflow_version": "None - Custom API",
@@ -600,6 +621,8 @@ class REST_API(BaseView):
             final_response = self.rest_api_plugin_version(base_response)
         elif api == "deploy_dag":
             final_response = self.deploy_dag(base_response)
+        elif api == "deploy_dag_archive":
+            final_response = self.deploy_dag_archive(base_response)
         elif api == "refresh_dag":
             final_response = self.refresh_dag(base_response)
         else:
@@ -706,7 +729,71 @@ class REST_API(BaseView):
         logging.info("Executing custom 'rest_api_plugin_version' function")
         return REST_API_Response_Util.get_200_response(base_response, rest_api_plugin_version)
 
-    # Custom Function for the deploy_dag API
+    # Custom function for the deploy_dag_archive API
+    def deploy_dag_archive(self, base_response):
+        logging.info("Executing custom 'deploy_dag_archive' function")
+
+        if 'dag_archive' not in request.files or request.files['dag_archive'].filename == '':  # check if the post request has the file part
+            logging.warning("The dag_archive argument wasn't provided")
+            return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive should be provided")
+
+        dag_archive = request.files['dag_archive']
+
+        dag_module = request.form.get('dag_module')
+        logging.info("deploy_dag dag_module upload: " + str(dag_module))
+
+        if not (dag_module and isinstance(dag_module, str)):
+            logging.info("The dag_module argument was not valid")
+            return REST_API_Response_Util.get_400_error_response(
+                base_response,
+                "dag_module = {}".format(dag_module)
+            )
+
+        working_dir = os.path.join(airflow_dags_folder, dag_module)
+
+        if not dag_archive.filename.endswith('.zip'):
+            return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive is not a *.zip file")
+
+        import zipfile
+
+        zf = zipfile.ZipFile(dag_archive.stream)
+
+        force = True if request.form.get('force') is not None else False
+        logging.info("deploy_dag_archive force upload: " + str(force))
+
+        file_names = [name for name in zf.namelist() if name.endswith('.py')]
+
+        if not force:
+            existing_paths = []
+            for name in file_names:
+                save_file_path = os.path.join(working_dir, name)
+                if os.path.exists(save_file_path):
+                    existing_paths.append(name)
+            if existing_paths:
+                logging.warning("Files already exist: {}".format(existing_paths))
+                return REST_API_Response_Util.get_400_error_response(base_response, "Files already exist: {}".format(existing_paths))
+
+        delete_current_dags = True if request.form.get('delete_current_dags') is not None else False
+        logging.info("deploy_dag_archive keep_top_level_folder in archived dages: " + str(delete_current_dags))
+
+        if delete_current_dags:
+            # Removes all contents of a folder but not the folder itself.
+            for root, dirs, files in os.walk(working_dir):
+                for f in files:
+                    os.unlink(os.path.join(root, f))
+                for d in dirs:
+                    shutil.rmtree(os.path.join(root, d))
+
+        for name in file_names:
+            zf.extract(name, path=working_dir)
+
+        return REST_API_Response_Util.get_200_response(
+            base_response=base_response,
+            output='Saved DAGS: [{}]'.format(file_names),
+            warning=None,
+        )
+
+    # Custom function for the deploy_dag API
     def deploy_dag(self, base_response):
         logging.info("Executing custom 'deploy_dag' function")
 
