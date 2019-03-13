@@ -17,6 +17,7 @@ import os
 import socket
 import shutil
 
+
 """
 CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org/cli.html
 """
@@ -431,6 +432,8 @@ apis_metadata = [
         "form_enctype": "multipart/form-data",
         "arguments": [],
         "post_arguments": [
+            {"name": "dag_module", "description": "Top level module name within dags folder",
+             "form_input_type": "text", "required": True},
             {"name": "dag_archive", "description": "Python file to upload and deploy", "form_input_type": "file",
              "required": True},
             {"name": "force", "description": "Force upload if any of the archived files exist.",
@@ -736,6 +739,18 @@ class REST_API(BaseView):
 
         dag_archive = request.files['dag_archive']
 
+        dag_module = request.form.get('dag_module')
+        logging.info("deploy_dag dag_module upload: " + str(dag_module))
+
+        if not (dag_module and isinstance(dag_module, str)):
+            logging.info("The dag_module argument was not valid")
+            return REST_API_Response_Util.get_400_error_response(
+                base_response,
+                "dag_module = {}".format(dag_module)
+            )
+
+        working_dir = os.path.join(airflow_dags_folder, dag_module)
+
         if not dag_archive.filename.endswith('.zip'):
             return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive is not a *.zip file")
 
@@ -746,32 +761,31 @@ class REST_API(BaseView):
         force = True if request.form.get('force') is not None else False
         logging.info("deploy_dag_archive force upload: " + str(force))
 
-        file_names = [name for name in zf.namelist() if name.endswith('.py') and '__init__' not in name]
+        file_names = [name for name in zf.namelist() if name.endswith('.py')]
 
         if not force:
             existing_paths = []
             for name in file_names:
-                save_file_path = os.path.join(airflow_dags_folder, name)
+                save_file_path = os.path.join(working_dir, name)
                 if os.path.exists(save_file_path):
                     existing_paths.append(name)
             if existing_paths:
                 logging.warning("Files already exist: {}".format(existing_paths))
                 return REST_API_Response_Util.get_400_error_response(base_response, "Files already exist: {}".format(existing_paths))
 
-
         delete_current_dags = True if request.form.get('delete_current_dags') is not None else False
         logging.info("deploy_dag_archive keep_top_level_folder in archived dages: " + str(delete_current_dags))
 
         if delete_current_dags:
             # Removes all contents of a folder but not the folder itself.
-            for root, dirs, files in os.walk(airflow_dags_folder):
+            for root, dirs, files in os.walk(working_dir):
                 for f in files:
                     os.unlink(os.path.join(root, f))
                 for d in dirs:
                     shutil.rmtree(os.path.join(root, d))
 
         for name in file_names:
-            zf.extract(name, path=airflow_dags_folder)
+            zf.extract(name, path=working_dir)
 
         return REST_API_Response_Util.get_200_response(
             base_response=base_response,
