@@ -432,14 +432,8 @@ apis_metadata = [
         "form_enctype": "multipart/form-data",
         "arguments": [],
         "post_arguments": [
-            {"name": "dag_module", "description": "Top level module name within dags folder",
-             "form_input_type": "text", "required": True},
             {"name": "dag_archive", "description": "Python file to upload and deploy", "form_input_type": "file",
              "required": True},
-            {"name": "force", "description": "Force upload if any of the archived files exist.",
-             "form_input_type": "checkbox", "required": False},
-            {"name": "delete_current_dags", "description": "Deletes all current dag files before adding the archive.",
-             "form_input_type": "checkbox", "required": False},
         ]
     },
     {
@@ -739,18 +733,6 @@ class REST_API(BaseView):
 
         dag_archive = request.files['dag_archive']
 
-        dag_module = request.form.get('dag_module')
-        logging.info("deploy_dag dag_module upload: " + str(dag_module))
-
-        if not (dag_module and isinstance(dag_module, str)):
-            logging.info("The dag_module argument was not valid")
-            return REST_API_Response_Util.get_400_error_response(
-                base_response,
-                "dag_module = {}".format(dag_module)
-            )
-
-        working_dir = os.path.join(airflow_dags_folder, dag_module)
-
         if not dag_archive.filename.endswith('.zip'):
             return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive is not a *.zip file")
 
@@ -763,29 +745,32 @@ class REST_API(BaseView):
 
         file_names = [name for name in zf.namelist() if name.endswith('.py')]
 
-        if not force:
-            existing_paths = []
-            for name in file_names:
-                save_file_path = os.path.join(working_dir, name)
-                if os.path.exists(save_file_path):
-                    existing_paths.append(name)
-            if existing_paths:
-                logging.warning("Files already exist: {}".format(existing_paths))
-                return REST_API_Response_Util.get_400_error_response(base_response, "Files already exist: {}".format(existing_paths))
+        # Check leading directory name of all the files to verify they belong
+        # under the same module. Discard __init__.py files as there may be one
+        # at top level in the archive.
+        # Expected structure:
+        # archive
+        # - - - > __init__.py
+        # - - - > module/
+        # - - - > module/dag1.py
+        # - - - > module/dag2.py
+        file_prefixes = [name.split('/')[0] for name in file_names if '__init__' not in name]
 
-        delete_current_dags = True if request.form.get('delete_current_dags') is not None else False
-        logging.info("deploy_dag_archive keep_top_level_folder in archived dages: " + str(delete_current_dags))
+        # Fail if multiple modules are found in archive.
+        if len(set(file_prefixes)) != 1:
+            return REST_API_Response_Util.get_400_error_response(base_response, "zip contains multiple namespaces: {}".format(file_names))
 
-        if delete_current_dags:
-            # Removes all contents of a folder but not the folder itself.
-            for root, dirs, files in os.walk(working_dir):
-                for f in files:
-                    os.unlink(os.path.join(root, f))
-                for d in dirs:
-                    shutil.rmtree(os.path.join(root, d))
+        namespace = file_prefixes[0]
+
+        # Removes all contents of namespace before saving new dags.
+        for root, dirs, files in os.walk(os.path.join(airflow_dags_folder, namespace)):
+            for f in files:
+                os.unlink(os.path.join(root, f))
+            for d in dirs:
+                shutil.rmtree(os.path.join(root, d))
 
         for name in file_names:
-            zf.extract(name, path=working_dir)
+            zf.extract(name, path=airflow_dags_folder)
 
         return REST_API_Response_Util.get_200_response(
             base_response=base_response,
