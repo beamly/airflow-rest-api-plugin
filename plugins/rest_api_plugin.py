@@ -453,6 +453,19 @@ apis_metadata = [
         ]
     },
     {
+        "name": "deploy_dag_archive",
+        "description": "Deploys a zipped archive of the entire DAG directory",
+        "airflow_version": "None - Custom API",
+        "http_method": "POST",
+        "post_body_description": "dag_archive - POST Body Element - REQUIRED",
+        "form_enctype": "multipart/form-data",
+        "arguments": [],
+        "post_arguments": [
+            {"name": "dag_archive", "description": "Python file to upload and deploy", "form_input_type": "file",
+             "required": True},
+        ]
+    },
+    {
         "name": "refresh_dag",
         "description": "Refresh a DAG in the Web Server",
         "airflow_version": "None - Custom API",
@@ -696,6 +709,8 @@ class REST_API(get_baseview()):
             final_response = self.rest_api_plugin_version(base_response)
         elif api == "deploy_dag":
             final_response = self.deploy_dag(base_response)
+        elif api == "deploy_dag_archive":
+            final_response = self.deploy_dag_archive(base_response)
         elif api == "refresh_dag":
             final_response = self.refresh_dag(base_response)
         elif api == "refresh_all_dags":
@@ -804,7 +819,62 @@ class REST_API(get_baseview()):
         logging.info("Executing custom 'rest_api_plugin_version' function")
         return REST_API_Response_Util.get_200_response(base_response, rest_api_plugin_version)
 
-    # Custom Function for the deploy_dag API
+    # Custom function for the deploy_dag_archive API
+    def deploy_dag_archive(self, base_response):
+        logging.info("Executing custom 'deploy_dag_archive' function")
+
+        if 'dag_archive' not in request.files or request.files['dag_archive'].filename == '':  # check if the post request has the file part
+            logging.warning("The dag_archive argument wasn't provided")
+            return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive should be provided")
+
+        dag_archive = request.files['dag_archive']
+
+        if not dag_archive.filename.endswith('.zip'):
+            return REST_API_Response_Util.get_400_error_response(base_response, "dag_archive is not a *.zip file")
+
+        import zipfile
+
+        zf = zipfile.ZipFile(dag_archive.stream)
+
+        force = True if request.form.get('force') is not None else False
+        logging.info("deploy_dag_archive force upload: " + str(force))
+
+        file_names = [name for name in zf.namelist() if name.endswith('.py')]
+
+        # Check leading directory name of all the files to verify they belong
+        # under the same module. Discard __init__.py files as there may be one
+        # at top level in the archive.
+        # Expected structure:
+        # archive
+        # - - - > __init__.py
+        # - - - > module/
+        # - - - > module/dag1.py
+        # - - - > module/dag2.py
+        file_prefixes = [name.split('/')[0] for name in file_names if '__init__' not in name]
+
+        # Fail if multiple modules are found in archive.
+        if len(set(file_prefixes)) != 1:
+            return REST_API_Response_Util.get_400_error_response(base_response, "zip contains multiple namespaces: {}".format(file_names))
+
+        namespace = file_prefixes[0]
+
+        # Removes all contents of namespace before saving new dags.
+        for root, dirs, files in os.walk(os.path.join(airflow_dags_folder, namespace)):
+            for f in files:
+                os.unlink(os.path.join(root, f))
+            for d in dirs:
+                shutil.rmtree(os.path.join(root, d))
+
+        for name in file_names:
+            zf.extract(name, path=airflow_dags_folder)
+
+        return REST_API_Response_Util.get_200_response(
+            base_response=base_response,
+            output='Saved DAGS: [{}]'.format(file_names),
+            warning=None,
+        )
+
+    # Custom function for the deploy_dag API
     def deploy_dag(self, base_response):
         logging.info("Executing custom 'deploy_dag' function")
 
