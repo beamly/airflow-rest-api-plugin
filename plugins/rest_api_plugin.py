@@ -18,10 +18,9 @@ import logging
 import subprocess
 import os
 import socket
+import shutil
 from flask_appbuilder import expose as app_builder_expose, BaseView as AppBuilderBaseView,has_access
 from flask_jwt_extended.view_decorators import jwt_required, verify_jwt_in_request
-
-
 
 """
 CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org/cli.html
