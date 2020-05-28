@@ -834,7 +834,7 @@ class REST_API(get_baseview()):
 
         import zipfile
 
-        zf = zipfile.ZipFile(dag_archive.stream)
+        zf = zipfile.ZipFile(dag_archive)
 
         force = True if request.form.get('force') is not None else False
         logging.info("deploy_dag_archive force upload: " + str(force))
